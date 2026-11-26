@@ -49,6 +49,8 @@ const P = {
   chevLeft: '<path d="M14.5 6l-6 6 6 6"/>',
   chevRight: '<path d="M9.5 6l6 6-6 6"/>',
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+  bolt: '<path d="M13 3L5 13.5h6L10 21l8-10.5h-6z"/>',
+  leaf: '<path d="M5 19c0-8 5-13 14-14 0 9-5 14-14 14zM5 19l7-7"/>',
   download: '<path d="M12 4.5v10.5M7.5 10.5L12 15l4.5-4.5M5 19.5h14"/>',
   upload: '<path d="M12 15V4.5M7.5 9L12 4.5 16.5 9M5 19.5h14"/>',
 };
@@ -97,6 +99,8 @@ function morphNode(from, to) {
   }
   syncAttrs(from, to);
   if (from.tagName === "TEXTAREA") return;
+  // data-keep: the element's children are driven by script (an animated figure), so leave them be.
+  if (from.hasAttribute("data-keep")) return;
   morphChildren(from, to);
 }
 

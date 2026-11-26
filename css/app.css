@@ -18,6 +18,7 @@
   --outline: #ddd2c2;
   --outline-variant: #eae1d3;
   --error: #ba1a1a;
+  --warn: #d18217;
   --inverse-surface: #2f3445;
   --inverse-on-surface: #f4efe8;
   --scrim: rgba(20, 24, 33, 0.45);
@@ -50,6 +51,7 @@
     --outline: #394154;
     --outline-variant: #2d3445;
     --error: #ffb4ab;
+    --warn: #f0ad4e;
     --inverse-surface: #e6e1da;
     --inverse-on-surface: #2a2f3b;
     --scrim: rgba(0, 0, 0, 0.6);
@@ -82,6 +84,7 @@
   --outline: #394154;
   --outline-variant: #2d3445;
   --error: #ffb4ab;
+  --warn: #f0ad4e;
   --inverse-surface: #e6e1da;
   --inverse-on-surface: #2a2f3b;
   --scrim: rgba(0, 0, 0, 0.6);
@@ -461,6 +464,65 @@ button.card { text-align: left; width: 100%; }
 .qrow.cur { background: var(--primary-container); color: var(--on-primary-container); }
 .qrow .n { width: 22px; text-align: center; font-weight: 600; font-size: 12px; }
 .qrow .photo { width: 44px; height: 44px; border-radius: 10px; flex: none; }
+
+/* ---------------------------------------------------------------- plyo mode */
+/* stick figure shown wherever a plyometric exercise would have a photo */
+.photo.fig { color: var(--on-bg); padding: 3px; transition: opacity 0.3s; }
+.fig svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.fig path { fill: none; stroke: currentColor; stroke-width: 5.5; stroke-linecap: round; stroke-linejoin: round; }
+.fig .to { stroke-width: 6.8; }
+.fig .bk { opacity: 0.45; }
+.fig .hd { fill: currentColor; }
+.fig .mat { stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; opacity: 0.16; }
+.fig .sh { fill: currentColor; opacity: 0.2; }
+.fig .bx { fill: currentColor; fill-opacity: 0.08; stroke: currentColor; stroke-opacity: 0.35; stroke-width: 1.8; }
+.fig.dim { opacity: 0.5; }
+.rcard .thumb.fig { color: var(--swo); border-color: transparent; padding: 5px; }
+.banner .photo.fig { color: var(--swo); background: color-mix(in srgb, var(--swa) 14%, transparent); border-color: transparent; padding: 8px; }
+.ring .photo.fig { padding: 9%; }
+.pip .photo.fig { padding: 6px; }
+
+/* Stretch / Plyo switch on the Routines tab */
+.seg { display: grid; grid-template-columns: 1fr 1fr; background: var(--surface-variant); border-radius: 14px; padding: 4px; }
+.seg button { height: 36px; display: flex; align-items: center; justify-content: center; gap: 6px; border-radius: 10px; font-weight: 600; color: var(--on-surface-variant); }
+.seg button[aria-pressed="true"] { background: var(--surface); color: var(--on-bg); box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12); }
+
+/* weekly plyo card */
+.week { padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+.days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+.days span { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 11px; color: var(--on-surface-variant); }
+.days i { width: 22px; height: 22px; border-radius: 50%; background: var(--surface-variant); display: block; }
+.days .did i { background: var(--primary); }
+.days .today i { box-shadow: 0 0 0 2px var(--surface), 0 0 0 3.5px var(--secondary); }
+
+/* workout detail */
+.warm { margin: 12px 16px 0; padding: 10px 12px; border-radius: 14px; background: var(--secondary-container); color: var(--on-secondary-container); display: flex; align-items: center; gap: 10px; width: calc(100% - 32px); text-align: left; }
+
+/* player: rest pill, set dots, coaching cue */
+.phase .pill.rest { background: var(--secondary-container); color: var(--on-secondary-container); }
+.sets { display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 8px; min-height: 18px; }
+.sets i { width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--outline); display: block; }
+.sets i.d { background: var(--primary); border-color: var(--primary); }
+.sets i.c { border-color: var(--primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 22%, transparent); }
+.sets span { margin-left: 2px; }
+.cue { margin-top: 6px; text-align: center; min-height: 20px; padding: 0 6px; }
+
+/* playlist builder: load meter and per-exercise steppers */
+.meter { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.zones { position: relative; display: grid; grid-template-columns: 80fr 60fr 60fr 60fr; gap: 3px; height: 8px; }
+.zones i { border-radius: 4px; background: var(--surface-variant); }
+.zones i.z-LIGHT.lit, .zones i.z-MODERATE.lit { background: var(--secondary); }
+.zones i.z-HIGH.lit { background: var(--warn); }
+.zones i.z-TOO_MUCH.lit { background: var(--error); }
+.zones b { position: absolute; top: -4px; width: 4px; height: 16px; border-radius: 2px; background: var(--on-bg); box-shadow: 0 0 0 2px var(--surface); transition: left 0.25s; transform: translateX(-2px); }
+.zlabels { display: grid; grid-template-columns: 80fr 60fr 60fr 60fr; gap: 3px; font-size: 11px; color: var(--on-surface-variant); }
+.brow { padding: 10px 8px 10px 10px; border-radius: 16px; display: flex; flex-direction: column; gap: 8px; }
+.steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.stp { background: var(--surface-variant); border-radius: 12px; padding: 4px 2px 2px; text-align: center; min-width: 0; }
+.stp small { display: block; font-size: 11px; line-height: 14px; color: var(--on-surface-variant); font-weight: 600; letter-spacing: 0.3px; text-transform: uppercase; }
+.stp div { display: flex; align-items: center; justify-content: space-between; }
+.stp b { font-size: 13px; font-weight: 700; white-space: nowrap; }
+.stp .icon-btn.sm { width: 28px; height: 28px; }
 
 .toast {
   position: absolute; left: 50%; bottom: 96px; transform: translateX(-50%);

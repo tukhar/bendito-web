@@ -9,6 +9,7 @@ let ctx = null;
 let master = null;
 let chimes = null;
 const clipCache = new Map(); // "ava/cobra" -> Promise<AudioBuffer|null>
+const missingClips = new Set(); // clips the server does not have (404): don't ask again
 
 function ensureContext() {
   if (!ctx) {
@@ -130,9 +131,13 @@ function trimSilence(buf) {
 
 function loadClip(voiceDir, clipId) {
   const key = `${voiceDir}/${clipId}`;
+  if (missingClips.has(key)) return Promise.resolve(null);
   if (!clipCache.has(key)) {
     const p = fetch(`voice/${key}.m4a`)
-      .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(r.statusText))))
+      .then((r) => {
+        if (r.status === 404) missingClips.add(key);
+        return r.ok ? r.arrayBuffer() : Promise.reject(new Error(r.statusText));
+      })
       .then((ab) => new Promise((res, rej) => ensureContext().decodeAudioData(ab, res, rej)))
       .then(trimSilence)
       .catch(() => {
@@ -177,10 +182,10 @@ export class CueEngine {
     this.stopUtterance();
   }
 
-  preload(stretchIds) {
+  preload(stretchIds, extraClips = []) {
     ensureContext();
     const dir = this.voiceDir;
-    const ids = [...CORE_CLIPS, ...new Set(stretchIds)];
+    const ids = [...CORE_CLIPS, ...extraClips, ...new Set(stretchIds)];
     // Sequential so the first cues are ready first and we don't flood the network.
     ids.reduce((p, id) => p.then(() => loadClip(dir, id)), Promise.resolve());
   }
@@ -198,6 +203,17 @@ export class CueEngine {
     this.queue(sc ? [stretchId, sc] : [stretchId], sc ? [140] : [], delayMs);
   }
   speakSwitchSides(delayMs = 0) { this.queue(["cue_switch_sides"], [], delayMs); }
+  /**
+   * Rest between plyometric sets: "Rest", then what follows it. Clips that have not been
+   * recorded yet are skipped, so this may say only part of the line or nothing at all.
+   */
+  speakRest({ nextStretchId = null, switchSides = false, lastSet = false } = {}, delayMs = 0) {
+    const clips = ["cue_rest"];
+    if (nextStretchId) clips.push("cue_up_next", nextStretchId);
+    else if (switchSides) clips.push("cue_switch_sides");
+    else if (lastSet) clips.push("cue_last_set");
+    this.queue(clips, clips.slice(1).map((_, i) => (i === 0 ? 260 : 160)), delayMs);
+  }
   speakHalfway() { this.queue(["cue_halfway"], [], 0); }
   speakComplete(delayMs = 220) { this.queue(["cue_complete"], [], delayMs); }
 

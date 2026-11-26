@@ -1,7 +1,7 @@
 // Offline support: the app shell is fetched network-first (so new deploys show
 // up right away) and photos/voice clips cache-first (they never change).
-const CACHE = "bendito-52986e6456";
-const SHELL = ["./", "index.html", "css/app.css", "js/app.js", "js/audio.js", "js/components.js", "js/content.js", "js/content-data.js", "js/modals.js", "js/player.js", "js/screens.js", "js/store.js", "js/ui.js", "icon.svg", "manifest.webmanifest"];
+const CACHE = "bendito-fb186042f9";
+const SHELL = ["./", "index.html", "css/app.css", "js/app.js", "js/audio.js", "js/components.js", "js/content.js", "js/content-data.js", "js/figure.js", "js/modals.js", "js/player.js", "js/screens.js", "js/store.js", "js/ui.js", "icon.svg", "manifest.webmanifest"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

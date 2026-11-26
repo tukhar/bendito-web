@@ -3,17 +3,23 @@ import { stretch } from "./content.js";
 
 export const SIDE_LABEL = { NONE: "", LEFT: "Left side", RIGHT: "Right side" };
 
+/**
+ * Flattens routine items into the steps the player runs. Bilateral stretches become a left and a
+ * right step. Plyometric exercises become one step per set (per side when bilateral), each
+ * followed by the item's own rest (`restAfterSec`; null means the ordinary transition applies).
+ */
 export function expandSteps(items) {
   const out = [];
   items.forEach((item, itemIndex) => {
     const s = stretch(item.stretchId);
     if (!s) return;
     const durationSec = Math.max(5, item.seconds);
-    if (s.bilateral) {
-      out.push({ itemIndex, stretch: s, durationSec, side: "LEFT" });
-      out.push({ itemIndex, stretch: s, durationSec, side: "RIGHT" });
-    } else {
-      out.push({ itemIndex, stretch: s, durationSec, side: "NONE" });
+    const isPlyo = !!s.plyo;
+    const setCount = isPlyo ? Math.max(1, item.sets ?? 1) : 1;
+    const restAfterSec = isPlyo ? Math.max(0, item.restSeconds ?? 0) : null;
+    const sides = s.bilateral ? ["LEFT", "RIGHT"] : ["NONE"];
+    for (let set = 1; set <= setCount; set++) {
+      for (const side of sides) out.push({ itemIndex, stretch: s, durationSec, side, set, setCount, restAfterSec, isPlyo });
     }
   });
   return out;
@@ -24,7 +30,7 @@ const PREP_SECONDS = 3;
 export class PlayerController {
   /**
    * @param {object} o
-   * @param {(ev: {type: string, step?: object, announceName?: boolean, secondsRemaining?: number}) => void} o.onCue
+   * @param {(ev: {type: string, step?: object, previous?: object, announceName?: boolean, secondsRemaining?: number}) => void} o.onCue
    * @param {(elapsedActiveSec: number, completedSteps: number) => void} o.onComplete
    */
   constructor({ routineId, routineName, items, transitionSeconds, onCue = () => {}, onComplete = () => {}, startItemIndex = 0, onChange = () => {} }) {
@@ -53,6 +59,8 @@ export class PlayerController {
       savedSessionId: null,
       feeling: 0,
       isSwitchingSides: false,
+      // True while a TRANSITION is the rest between plyometric sets; currentStep is what comes next.
+      isRest: false,
     };
     this.state = this.steps.length
       ? { ...base, currentIndex: this.initialIndex }
@@ -115,23 +123,28 @@ export class PlayerController {
     if (!step) return;
 
     const nextRemaining = cur.remainingSec - 1;
-    const nextElapsed = cur.phase === "ACTIVE" ? cur.elapsedActiveSec + 1 : cur.elapsedActiveSec;
+    // Rest between plyometric sets is part of the workout, so it counts toward session time.
+    const counts = cur.phase === "ACTIVE" || (cur.phase === "TRANSITION" && cur.isRest);
+    const nextElapsed = counts ? cur.elapsedActiveSec + 1 : cur.elapsedActiveSec;
 
     if (nextRemaining > 0) {
       this.set({ remainingSec: nextRemaining, elapsedActiveSec: nextElapsed });
       if (cur.phase === "ACTIVE") {
-        if (cur.stepTotalSec >= 12 && nextRemaining === Math.floor(cur.stepTotalSec / 2)) {
+        if (!step.isPlyo && cur.stepTotalSec >= 12 && nextRemaining === Math.floor(cur.stepTotalSec / 2)) {
           this.onCue({ type: "Halfway", step });
         }
         if (nextRemaining >= 1 && nextRemaining <= 3) {
           this.onCue({ type: "CountdownTick", secondsRemaining: nextRemaining });
         }
+      } else if (cur.phase === "TRANSITION" && cur.isRest && nextRemaining >= 1 && nextRemaining <= 3) {
+        this.onCue({ type: "CountdownTick", secondsRemaining: nextRemaining });
       }
       return;
     }
 
     if (cur.phase === "PREPARE" || cur.phase === "TRANSITION") {
-      this.set({ phase: "ACTIVE", remainingSec: step.durationSec, stepTotalSec: step.durationSec, isSwitchingSides: false });
+      // nextElapsed carries the final second of a plyo rest (it is unchanged for PREPARE and plain transitions).
+      this.set({ phase: "ACTIVE", remainingSec: step.durationSec, stepTotalSec: step.durationSec, isSwitchingSides: false, isRest: false, elapsedActiveSec: nextElapsed });
       this.onCue({ type: "StartStretch", step, announceName: false });
       return;
     }
@@ -146,11 +159,18 @@ export class PlayerController {
         return;
       }
       const nextStep = cur.steps[nextIdx];
-      const switching = nextStep.side === "RIGHT" && nextStep.itemIndex === step.itemIndex;
-      const gap = Math.max(0, this.transitionSeconds);
+      const rest = step.restAfterSec;
+      const isRest = rest != null;
+      const switching = nextStep.side === "RIGHT" && nextStep.itemIndex === step.itemIndex && nextStep.set === step.set;
+      const gap = Math.max(0, isRest ? rest : this.transitionSeconds);
       if (gap > 0) {
-        this.set({ currentIndex: nextIdx, phase: "TRANSITION", remainingSec: gap, stepTotalSec: gap, elapsedActiveSec: nextElapsed, completedSteps: nextCompleted, isSwitchingSides: switching });
-        this.onCue({ type: switching ? "SwitchSides" : "UpNext", step: nextStep });
+        this.set({ currentIndex: nextIdx, phase: "TRANSITION", remainingSec: gap, stepTotalSec: gap, elapsedActiveSec: nextElapsed, completedSteps: nextCompleted, isSwitchingSides: switching, isRest });
+        if (isRest) {
+          const isNewExercise = nextStep.itemIndex !== step.itemIndex;
+          this.onCue({ type: "Rest", step: nextStep, previous: step, isNewExercise, isSwitchingSides: !isNewExercise && nextStep.side !== step.side && nextStep.set === step.set });
+        } else {
+          this.onCue({ type: switching ? "SwitchSides" : "UpNext", step: nextStep });
+        }
       } else {
         this.set({ currentIndex: nextIdx, phase: "ACTIVE", remainingSec: nextStep.durationSec, stepTotalSec: nextStep.durationSec, elapsedActiveSec: nextElapsed, completedSteps: nextCompleted, isSwitchingSides: false });
         this.onCue(switching ? { type: "SwitchSides", step: nextStep } : { type: "StartStretch", step: nextStep, announceName: true });
@@ -167,7 +187,7 @@ export class PlayerController {
     const step = this.currentStep;
     const { phase } = this.state;
     if (!step || (phase !== "PREPARE" && phase !== "TRANSITION")) return;
-    this.set({ phase: "ACTIVE", remainingSec: step.durationSec, stepTotalSec: step.durationSec, isSwitchingSides: false });
+    this.set({ phase: "ACTIVE", remainingSec: step.durationSec, stepTotalSec: step.durationSec, isSwitchingSides: false, isRest: false });
     this.onCue({ type: "StartStretch", step, announceName: false });
   }
 
@@ -176,10 +196,12 @@ export class PlayerController {
     if (cur.phase === "COMPLETED") return;
     if (cur.phase === "TRANSITION") return this.skipTransition();
     if (cur.phase === "PREPARE") {
+      // For a jump workout, Next during "Get ready" starts set 1 rather than skipping it.
+      if (cur.steps[cur.currentIndex]?.isPlyo) return this.skipTransition();
       const nextIdx = cur.currentIndex + 1;
       if (nextIdx < cur.steps.length) {
         const nextStep = cur.steps[nextIdx];
-        this.set({ currentIndex: nextIdx, phase: "ACTIVE", remainingSec: nextStep.durationSec, stepTotalSec: nextStep.durationSec, isSwitchingSides: false, isPaused: false });
+        this.set({ currentIndex: nextIdx, phase: "ACTIVE", remainingSec: nextStep.durationSec, stepTotalSec: nextStep.durationSec, isSwitchingSides: false, isRest: false, isPaused: false });
         this.onCue({ type: "StartStretch", step: nextStep, announceName: true });
       } else {
         this.skipTransition();
@@ -194,7 +216,7 @@ export class PlayerController {
       this.dispatchCompleteIfNeeded();
     } else {
       const nextStep = cur.steps[nextIdx];
-      this.set({ currentIndex: nextIdx, phase: "ACTIVE", remainingSec: nextStep.durationSec, stepTotalSec: nextStep.durationSec, completedSteps: nextCompleted, isSwitchingSides: false, isPaused: false });
+      this.set({ currentIndex: nextIdx, phase: "ACTIVE", remainingSec: nextStep.durationSec, stepTotalSec: nextStep.durationSec, completedSteps: nextCompleted, isSwitchingSides: false, isRest: false, isPaused: false });
       this.onCue({ type: "StartStretch", step: nextStep, announceName: true });
     }
   }
@@ -205,7 +227,7 @@ export class PlayerController {
     const targetIdx = cur.steps.findIndex((s) => s.itemIndex === itemIndex);
     if (targetIdx < 0) return;
     const t = cur.steps[targetIdx];
-    this.set({ currentIndex: targetIdx, phase: "ACTIVE", remainingSec: t.durationSec, stepTotalSec: t.durationSec, isSwitchingSides: false, isPaused: false });
+    this.set({ currentIndex: targetIdx, phase: "ACTIVE", remainingSec: t.durationSec, stepTotalSec: t.durationSec, isSwitchingSides: false, isRest: false, isPaused: false });
     this.onCue({ type: "StartStretch", step: t, announceName: true });
   }
 
@@ -220,7 +242,7 @@ export class PlayerController {
     }
     const targetIdx = Math.max(0, cur.currentIndex - 1);
     const t = cur.steps[targetIdx];
-    this.set({ currentIndex: targetIdx, phase: "ACTIVE", remainingSec: t.durationSec, stepTotalSec: t.durationSec, isSwitchingSides: false });
+    this.set({ currentIndex: targetIdx, phase: "ACTIVE", remainingSec: t.durationSec, stepTotalSec: t.durationSec, isSwitchingSides: false, isRest: false });
     this.onCue({ type: "StartStretch", step: t, announceName: true });
   }
 

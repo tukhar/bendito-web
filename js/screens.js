@@ -1,5 +1,8 @@
 // Tab screens (Routines, Library, Progress, Settings) and onboarding.
-import { AREAS, AREA_LABEL, CATEGORIES, DIFFICULTIES, KINDS, VOICES, stretch, stretches } from "./content.js";
+import {
+  AREAS, AREA_LABEL, CATEGORIES, DIFFICULTIES, KINDS, PLYO_LEVELS, PLYO_SESSIONS_PER_WEEK, VOICES, allExercises, isPlyoRoutine, plyoExercises,
+  plyoLevel, stretch, stretches,
+} from "./content.js";
 import { dialog, heroCard, routineCard, sheet, stretchDetail, stretchRow } from "./components.js";
 import { addDays, dayKey, keyToDate, storageWorks } from "./store.js";
 import { esc, formatDuration, icon } from "./ui.js";
@@ -16,23 +19,101 @@ const FILTERS = [
   ["CUSTOM", "My Routines"],
 ];
 const CATEGORY_ORDER = ["CUSTOM", "DAILY", "RELIEF", "FLEXIBILITY", "SPORT", "RELAX", "EXPERT"];
+const PLYO_FILTERS = [["ALL", "All"], ...PLYO_LEVELS, ["CUSTOM", "My Workouts"]];
+const weekdayFmt = new Intl.DateTimeFormat(undefined, { weekday: "long" });
 const has = (hay, needle) => hay.toLowerCase().includes(needle.toLowerCase());
 const chip = (label, pressed, act, arg = "", cls = "") =>
   `<button class="chip ${cls}" aria-pressed="${pressed}" data-act="${act}" data-arg="${esc(arg)}">${pressed && cls.includes("lg") ? icon("check", 18) : ""}${esc(label)}</button>`;
 
 // ---------------------------------------------------------------- Routines
+const modeSwitch = (plyo) => `<div class="seg" data-key="mode" role="group" aria-label="Training mode">
+    <button aria-pressed="${!plyo}" data-act="setMode" data-arg="stretch">${icon("leaf", 16)}Stretch</button>
+    <button aria-pressed="${plyo}" data-act="setMode" data-arg="plyo">${icon("bolt", 16)}Plyo</button>
+  </div>`;
+
+const routinesHead = (u, sub, placeholder) => `<div class="row between" data-key="head">
+      <div><h1 class="headline-m">${greeting()}</h1><div class="body-m muted">${sub}</div></div>
+      <button class="icon-btn" data-act="toggleSearch" aria-label="${u.showSearch ? "Close search" : "Search routines"}">${icon(u.showSearch ? "close" : "search")}</button>
+    </div>
+    ${u.showSearch ? `<label class="field" data-key="search">${icon("search")}<input type="search" data-input="routineQuery" placeholder="${placeholder}" value="${esc(u.query)}" autocomplete="off" aria-label="Search routines">${u.query ? `<button class="icon-btn sm" data-act="clearRoutineQuery" aria-label="Clear">${icon("close", 20)}</button>` : ""}</label>` : ""}`;
+
+function greeting() {
+  const hour = new Date().getHours();
+  return hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+}
+
+/** Weekly plyo plan: sessions done of the weekly target, Monday-to-Sunday dots and readiness. */
+function plyoWeekCard(week) {
+  const today = new Date();
+  const todayKey = dayKey(today);
+  const dots = ["M", "T", "W", "T", "F", "S", "S"]
+    .map((label, i) => {
+      const k = dayKey(addDays(week.weekStart, i));
+      const cls = [week.daysDone.has(k) && "did", k === todayKey && "today"].filter(Boolean).join(" ");
+      return `<span class="${cls}"><i></i>${label}</span>`;
+    })
+    .join("");
+  const n = week.sessionsThisWeek;
+  const since = week.daysSinceLast;
+  const last = since == null ? "No plyo sessions yet." : since === 0 ? "Last plyo today." : since === 1 ? "Last plyo yesterday." : `Last plyo ${since} days ago.`;
+  const tomorrow = dayKey(week.nextReadyDay) === dayKey(addDays(today, 1));
+  const status = week.isReady ? "Legs ready" : `Next: ${tomorrow ? "tomorrow" : weekdayFmt.format(week.nextReadyDay)}`;
+  return `<div class="card week" data-key="week">
+    <div class="row between"><span class="title-s">${n} of ${PLYO_SESSIONS_PER_WEEK} sessions this week</span><span class="label-m ${week.isReady ? "accent" : "muted"}">${status}</span></div>
+    <div class="days" role="img" aria-label="${n} plyo session${n === 1 ? "" : "s"} this week">${dots}</div>
+    <div class="body-s muted">${last} Leave 48 hours between sessions.</div>
+  </div>`;
+}
+
+function plyoRoutinesScreen(S, ui) {
+  const u = ui.routines;
+  const q = u.query.trim();
+  const fav = new Set(S.settings.favorites);
+  const ts = S.settings.transitionSeconds;
+  const f = u.plyoFilter || "ALL";
+  const filtered = S.allRoutines.filter((r) => {
+    if (!isPlyoRoutine(r)) return false;
+    const fOk = f === "ALL" ? true : f === "CUSTOM" ? r.isCustom : !r.isCustom && plyoLevel(r.items) === f;
+    const qOk = !q || has(r.name, q) || has(r.subtitle, q) || r.items.some((it) => has(stretch(it.stretchId)?.name || "", q));
+    return fOk && qOk;
+  });
+  const card = (r) => routineCard(r, { transitionSeconds: ts, isFavorite: fav.has(r.id) });
+  let list;
+  if (!filtered.length) {
+    const [t, d] = f === "CUSTOM" ? ["No custom workouts yet", "Tap New Workout below to build your own playlist."] : ["No matching workouts", "Try another search term or level."];
+    list = `<div class="card empty" data-key="empty" style="margin-top:16px"><div class="title-m">${t}</div><div class="body-m muted" style="margin-top:6px">${d}</div></div>`;
+  } else if (f === "ALL" && !q) {
+    const custom = filtered.filter((r) => r.isCustom);
+    const builtIn = filtered.filter((r) => !r.isCustom);
+    list = (custom.length ? `<div class="section-head" data-key="h-PCUSTOM"><h2 class="title-l">My Workouts</h2><div class="body-s muted">Playlists you built</div></div>${custom.map(card).join("")}` : "") +
+      `<div class="section-head" data-key="h-PLYO"><h2 class="title-l">${CATEGORIES.PLYO.label}</h2><div class="body-s muted">${CATEGORIES.PLYO.blurb}</div></div>${builtIn.map(card).join("")}`;
+  } else {
+    list = filtered.map(card).join("");
+  }
+  return `<div class="screen">
+    <div class="scroll" data-scroll="routines-plyo"><div class="pad stack" style="padding-bottom:92px">
+      ${routinesHead(u, "Pick a workout or build your own", "Search workouts or exercises...")}
+      ${modeSwitch(true)}
+      ${plyoWeekCard(S.plyoWeek)}
+      <div class="chips" data-key="pfilters" role="toolbar" aria-label="Filter workouts">${PLYO_FILTERS.map(([id, label]) => chip(label, f === id, "plyoFilter", id)).join("")}</div>
+      ${list}
+    </div></div>
+    <button class="fab" data-act="newRoutine">${icon("plus")}New Workout</button>
+  </div>`;
+}
+
 export function routinesScreen(S, ui, recommended) {
+  if (S.settings.plyoMode) return plyoRoutinesScreen(S, ui);
   const u = ui.routines;
   const q = u.query.trim();
   const fav = new Set(S.settings.favorites);
   const ts = S.settings.transitionSeconds;
   const filtered = S.allRoutines.filter((r) => {
+    if (isPlyoRoutine(r)) return false; // plyo workouts live on the Plyo side
     const fOk = u.filter === "ALL" ? true : u.filter === "FAVORITES" ? fav.has(r.id) : r.category === u.filter;
     const qOk = !q || has(r.name, q) || has(r.subtitle, q) || r.items.some((it) => has(stretch(it.stretchId)?.name || "", q));
     return fOk && qOk;
   });
-  const hour = new Date().getHours();
-  const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
   const goal = Math.max(1, S.settings.dailyGoalMinutes);
   const todayMin = S.stats.todayMinutes;
   const pct = Math.min(1, todayMin / goal) * 100;
@@ -58,11 +139,8 @@ export function routinesScreen(S, ui, recommended) {
 
   return `<div class="screen">
     <div class="scroll" data-scroll="routines"><div class="pad stack" style="padding-bottom:92px">
-      <div class="row between" data-key="head">
-        <div><h1 class="headline-m">${greeting}</h1><div class="body-m muted">Pick a routine or build your own</div></div>
-        <button class="icon-btn" data-act="toggleSearch" aria-label="${u.showSearch ? "Close search" : "Search routines"}">${icon(u.showSearch ? "close" : "search")}</button>
-      </div>
-      ${u.showSearch ? `<label class="field" data-key="search">${icon("search")}<input type="search" data-input="routineQuery" placeholder="Search routines or stretches..." value="${esc(u.query)}" autocomplete="off" aria-label="Search routines">${u.query ? `<button class="icon-btn sm" data-act="clearRoutineQuery" aria-label="Clear">${icon("close", 20)}</button>` : ""}</label>` : ""}
+      ${routinesHead(u, "Pick a routine or build your own", "Search routines or stretches...")}
+      ${modeSwitch(false)}
       <button class="card row" data-key="goal" data-act="tab" data-arg="progress" style="padding:12px 16px;gap:0">
         <span class="accent">${icon("fire", 26)}</span>
         <span class="col" style="margin-left:8px"><span class="title-s bold">${S.stats.currentStreak} day streak</span><span class="body-s muted">Best ${S.stats.longestStreak}d</span></span>
@@ -83,7 +161,7 @@ export function routinesScreen(S, ui, recommended) {
 export function libraryScreen(S, ui) {
   const u = ui.library;
   const q = u.query.trim();
-  const filtered = stretches.filter(
+  const filtered = allExercises.filter(
     (s) =>
       (!u.area || s.allAreas.has(u.area)) &&
       (!u.difficulty || s.difficulty === u.difficulty) &&
@@ -93,11 +171,11 @@ export function libraryScreen(S, ui) {
   const inspected = u.inspected && stretch(u.inspected);
   return `<div class="screen">
     <div class="scroll" data-scroll="library"><div class="pad stack">
-      <div data-key="head"><h1 class="headline-m">Stretch Library</h1><div class="body-m muted">${stretches.length} stretches, yoga poses &amp; mobility drills</div></div>
-      <label class="field" data-key="search">${icon("search")}<input type="search" data-input="libraryQuery" placeholder="Search stretches, muscles..." value="${esc(u.query)}" autocomplete="off" aria-label="Search stretches">${u.query ? `<button class="icon-btn sm" data-act="clearLibraryQuery" aria-label="Clear">${icon("close", 20)}</button>` : ""}</label>
+      <div data-key="head"><h1 class="headline-m">Exercise Library</h1><div class="body-m muted">${stretches.length} stretches, yoga poses &amp; mobility drills, plus ${plyoExercises.length} plyo exercises</div></div>
+      <label class="field" data-key="search">${icon("search")}<input type="search" data-input="libraryQuery" placeholder="Search exercises, muscles..." value="${esc(u.query)}" autocomplete="off" aria-label="Search exercises">${u.query ? `<button class="icon-btn sm" data-act="clearLibraryQuery" aria-label="Clear">${icon("close", 20)}</button>` : ""}</label>
       <div class="chips" data-key="areas">${chip("All areas", !u.area, "libArea", "")}${AREAS.map(([id, l]) => chip(l, u.area === id, "libArea", id)).join("")}</div>
       <div class="chips" data-key="kinds" style="margin-top:-4px">${DIFFICULTIES.map(([id, l]) => chip(l, u.difficulty === id, "libDifficulty", id)).join("")}${KINDS.map(([id, l]) => chip(l, u.kind === id, "libKind", id)).join("")}</div>
-      <div class="label-l muted" data-key="count">${filtered.length} stretches</div>
+      <div class="label-l muted" data-key="count">${filtered.length} ${filtered.every((s) => s.plyo) && filtered.length ? "exercises" : "stretches"}</div>
       ${filtered.map((s) => stretchRow(s, { key: `s-${s.id}` })).join("")}
     </div></div>
     ${inspected ? sheet(stretchDetail(inspected), { label: inspected.name }) : ""}
@@ -106,6 +184,7 @@ export function libraryScreen(S, ui) {
 
 // ---------------------------------------------------------------- Progress
 const FEELING_EMOJI = { 1: "😖", 2: "😕", 3: "🙂", 4: "😌", 5: "🤩" };
+const LEG_FEELING_EMOJI = { 1: "🥵", 2: "😮‍💨", 3: "🙂", 4: "😀", 5: "🤩" };
 const dateFmt = new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 const monthDayFmt = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
 const monthFmt = new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric" });
@@ -147,7 +226,7 @@ export function progressScreen(S, ui) {
   if (u.selected) {
     const mins = st.minutesByDay.get(u.selected) || 0;
     const label = monthDayFmt.format(keyToDate(u.selected));
-    selText = `<div class="body-s muted" style="margin-top:10px">${label}: ${mins > 0 ? `${Math.max(1, Math.round(mins))} min stretched` : "No sessions"}</div>`;
+    selText = `<div class="body-s muted" style="margin-top:10px">${label}: ${mins > 0 ? `${Math.max(1, Math.round(mins))} active min` : "No sessions"}</div>`;
   }
 
   const sessions = S.sessions.slice(0, 30);
@@ -165,7 +244,7 @@ export function progressScreen(S, ui) {
       <div class="card pad16">
         <div class="row between"><span class="title-m">Today's Goal</span><span class="label-l accent">${Math.round(st.todayMinutes)} / ${goal} min</span></div>
         <div class="bar" style="margin-top:10px;height:10px"><i style="width:${Math.min(1, st.todayMinutes / goal) * 100}%"></i></div>
-        <div class="body-s muted" style="margin-top:10px">${st.weekMinutes} min stretched this week</div>
+        <div class="body-s muted" style="margin-top:10px">${st.weekMinutes} active min this week</div>
       </div>
       <div class="card pad16">
         <div class="row between"><span class="title-m">Last 7 Days</span><span class="label-m" style="color:var(--secondary)">Goal: ${goal} min</span></div>
@@ -190,8 +269,8 @@ export function progressScreen(S, ui) {
       <h2 class="title-l" style="margin-top:6px">Recent Sessions</h2>
       ${sessions.length ? sessions
         .map((s) => `<div class="card row" data-key="sess-${s.id}" style="padding:12px 14px;border-radius:16px">
-          <div class="grow"><div class="title-s ellipsis">${esc(s.routineName)}</div><div class="body-s muted" style="margin-top:2px">${dateFmt.format(new Date(s.startedAt))} · ${formatDuration(s.durationSec)} · ${s.stretchCount} poses</div></div>
-          ${FEELING_EMOJI[s.feeling] ? `<span style="font-size:20px;margin-right:4px">${FEELING_EMOJI[s.feeling]}</span>` : ""}
+          <div class="grow"><div class="title-s ellipsis">${esc(s.routineName)}</div><div class="body-s muted" style="margin-top:2px">${dateFmt.format(new Date(s.startedAt))} · ${formatDuration(s.durationSec)} · ${s.stretchCount} ${s.plyo ? "sets" : "poses"}</div></div>
+          ${FEELING_EMOJI[s.feeling] ? `<span style="font-size:20px;margin-right:4px">${(s.plyo ? LEG_FEELING_EMOJI : FEELING_EMOJI)[s.feeling]}</span>` : ""}
           <button class="icon-btn" data-act="askDeleteSession" data-arg="${s.id}" aria-label="Delete session">${icon("trash", 20)}</button>
         </div>`)
         .join("") : `<div class="card empty"><div class="title-m">No sessions logged yet</div><div class="body-m muted" style="margin-top:6px">Complete your first routine to start building a streak.</div></div>`}
@@ -252,7 +331,7 @@ export function settingsScreen(S, ui) {
     </div></div>
     ${u.showClear ? dialog({
       title: "Clear all data?",
-      text: "This deletes all logged stretching sessions, streaks, and custom routines. This cannot be undone.",
+      text: "This deletes all logged sessions, streaks, and custom routines and workouts. This cannot be undone.",
       actions: [{ label: "Cancel", act: "cancelClear" }, { label: "Clear Everything", act: "confirmClear", danger: true }],
     }) : ""}
   </div>`;

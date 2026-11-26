@@ -1,7 +1,8 @@
 // App shell: navigation (tabs + modal stack mirrored into browser history),
 // event delegation, rendering and the guided-player lifecycle.
 import { CueEngine, unlockAudio, vibrate } from "./audio.js";
-import { stretch } from "./content.js";
+import { PLYO_RANGE, defaultItem, isPlyoItems, isPlyoRoutine, plainItem, stretch } from "./content.js";
+import { startFigures } from "./figure.js";
 import { builderScreen, detailScreen, playerScreen } from "./modals.js";
 import { PlayerController } from "./player.js";
 import { libraryScreen, onboardingScreen, progressScreen, routinesScreen, settingsScreen, shiftMonth, thisMonthKey } from "./screens.js";
@@ -20,7 +21,7 @@ const TABS = [
 
 const ui = {
   tab: "routines",
-  routines: { showSearch: false, query: "", filter: "ALL" },
+  routines: { showSearch: false, query: "", filter: "ALL", plyoFilter: "ALL" },
   library: { query: "", area: null, difficulty: null, kind: null, inspected: null },
   progress: { month: thisMonthKey(), selected: null, pendingDelete: null },
   settings: { showClear: false },
@@ -32,8 +33,8 @@ const stack = [];
 const top = () => stack[stack.length - 1] || null;
 const findRoutine = (id) => store.getState().allRoutines.find((r) => r.id === id) || null;
 let itemKeySeq = 0;
-const withKeys = (items) => items.map((i) => ({ stretchId: i.stretchId, seconds: i.seconds, key: ++itemKeySeq }));
-const plainItems = (items) => items.map(({ stretchId, seconds }) => ({ stretchId, seconds }));
+const withKeys = (items) => items.map((i) => ({ ...plainItem(i), key: ++itemKeySeq }));
+const plainItems = (items) => items.map(plainItem);
 
 // ---------------------------------------------------------------- rendering
 const scrollMemory = new Map();
@@ -209,7 +210,8 @@ function computeRingSize() {
 
 function openPlayer(routineId, routineName, items, startItemIndex = 0) {
   unlockAudio();
-  pushModal({ type: "player", routineId, routineName, items: plainItems(items), startItemIndex, muted: false, showQueue: false, showExit: false, ringSize: computeRingSize() });
+  const plain = plainItems(items);
+  pushModal({ type: "player", routineId, routineName, items: plain, plyo: isPlyoItems(plain), startItemIndex, muted: false, showQueue: false, showExit: false, ringSize: computeRingSize() });
 }
 
 function startPlayer(m) {
@@ -233,13 +235,14 @@ function startPlayer(m) {
         durationSec: Math.max(elapsed, 1),
         stretchCount: Math.max(completedSteps, 1),
         completed: true,
+        ...(m.plyo ? { plyo: true } : {}),
       });
       m.controller.setSavedSession(id);
       releaseWakeLock();
     },
   });
   m.startedAt = startedAt;
-  cue.preload(m.items.map((i) => i.stretchId));
+  cue.preload(m.items.map((i) => i.stretchId), m.plyo ? ["cue_rest", "cue_last_set"] : []);
   m.controller.start();
   acquireWakeLock();
 }
@@ -270,6 +273,21 @@ function handleCue(ev, s, muted) {
       if (sounds) cue.chime("switch");
       if (s.vibration) vibrate(45);
       if (voice) cue.speakSwitchSides(s.sounds ? 220 : 0);
+      break;
+    case "Rest":
+      // A plyometric set just ended; `step` is what follows the rest.
+      if (sounds) cue.chime("switch");
+      if (s.vibration) vibrate(45);
+      if (voice) {
+        cue.speakRest(
+          {
+            nextStretchId: ev.isNewExercise ? step.stretch.id : null,
+            switchSides: ev.isSwitchingSides,
+            lastSet: !ev.isNewExercise && !ev.isSwitchingSides && step.setCount > 1 && step.set === step.setCount,
+          },
+          s.sounds ? 220 : 0,
+        );
+      }
       break;
     case "Halfway":
       if (voice) cue.speakHalfway();
@@ -311,6 +329,13 @@ const actions = {
   routineFilter(arg) {
     ui.routines.filter = arg;
   },
+  plyoFilter(arg) {
+    ui.routines.plyoFilter = arg;
+  },
+  setMode(arg) {
+    ui.routines.query = "";
+    store.updateSettings({ plyoMode: arg === "plyo" });
+  },
   toggleFavorite: (id) => store.toggleFavorite(id),
   openRoutine(id) {
     const r = routineAt(id);
@@ -320,7 +345,7 @@ const actions = {
     const r = routineAt(id);
     if (r) openPlayer(r.id, r.name, r.items);
   },
-  newRoutine: () => openBuilder(null, false),
+  newRoutine: () => openBuilder(null, false, store.getState().settings.plyoMode),
 
   // library
   clearLibraryQuery() {
@@ -341,7 +366,7 @@ const actions = {
   practiceStretch(id) {
     const s = stretch(id);
     ui.library.inspected = null;
-    if (s) openPlayer(`single_${s.id}`, s.name, [{ stretchId: s.id, seconds: s.defaultSeconds }]);
+    if (s) openPlayer(`single_${s.id}`, s.name, [defaultItem(s)]);
   },
 
   // progress
@@ -490,8 +515,19 @@ const actions = {
   bRemove(idx) {
     top().items.splice(Number(idx), 1);
   },
+  bPlyoStep(arg) {
+    const [idx, field, dir] = arg.split(":");
+    const it = top().items[Number(idx)];
+    const range = PLYO_RANGE[field];
+    if (!it || !range) return;
+    const [min, max, step] = range;
+    it[field] = Math.min(max, Math.max(min, it[field] + Number(dir) * step));
+  },
   bOpenAdd() {
-    Object.assign(top(), { showAdd: true, addQuery: "", addArea: null });
+    Object.assign(top(), { showAdd: true, addQuery: "", addArea: null, addLevel: null });
+  },
+  bAddLevel(arg) {
+    top().addLevel = arg || null;
   },
   bCloseAdd() {
     top().showAdd = false;
@@ -503,13 +539,14 @@ const actions = {
     const m = top();
     const s = stretch(id);
     if (!s) return;
-    m.items.push({ stretchId: s.id, seconds: s.defaultSeconds, key: ++itemKeySeq });
+    if (!!s.plyo !== !!m.plyo) return; // each builder only takes its own kind
+    m.items.push({ ...defaultItem(s), key: ++itemKeySeq });
     m.error = null;
   },
   bSave() {
     const m = top();
-    if (!m.name.trim()) return void (m.error = "Give your routine a name.");
-    if (!m.items.length) return void (m.error = "Add at least one stretch.");
+    if (!m.name.trim()) return void (m.error = m.plyo ? "Give your workout a name." : "Give your routine a name.");
+    if (!m.items.length) return void (m.error = m.plyo ? "Add at least one exercise." : "Add at least one stretch.");
     const savedId = store.saveCustomRoutine(m.editingId, m.name, plainItems(m.items));
     closeTop();
     const prev = top();
@@ -542,6 +579,7 @@ const actions = {
       durationSec: st.elapsedActiveSec,
       stretchCount: Math.max(st.completedSteps, 1),
       completed: false,
+      ...(m.plyo ? { plyo: true } : {}),
     });
     closeTop();
   },
@@ -577,10 +615,13 @@ const actions = {
   playerDone: () => closeTop(),
 };
 
-function openBuilder(sourceId, isDuplicate) {
+function openBuilder(sourceId, isDuplicate, plyo = false) {
   const src = sourceId ? findRoutine(sourceId) : null;
   pushModal({
     type: "builder",
+    // A plyo builder edits sets, work and rest; it opens for plyo workouts and from the Plyo side.
+    plyo: src ? isPlyoRoutine(src) : plyo,
+    addLevel: null,
     isDuplicate,
     editingId: src && !isDuplicate && src.isCustom ? src.id : null,
     name: src ? (isDuplicate ? `${src.name} (Copy)` : src.name) : "",
@@ -691,6 +732,7 @@ window.matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", s
 
 if (history.state?.bendito) history.replaceState(null, "");
 render();
+startFigures(root);
 
 if ("serviceWorker" in navigator && location.protocol === "https:") {
   navigator.serviceWorker.register("sw.js").catch(() => {});

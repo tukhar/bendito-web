@@ -1,6 +1,6 @@
 // Persistent app state (settings, session history, custom routines) kept in
 // localStorage, plus the streak/minutes statistics derived from it.
-import { builtInRoutineIds, builtInRoutines, customToRoutine, stretch } from "./content.js";
+import { PLYO_RECOVERY_DAYS, builtInRoutineIds, builtInRoutines, customToRoutine, isPlyoRoutine, stretch } from "./content.js";
 
 const KEY = "bendito.v1";
 
@@ -16,6 +16,8 @@ export const DEFAULT_SETTINGS = {
   keepScreenOn: true,
   themeMode: "SYSTEM",
   favorites: [],
+  // Which side of the Routines tab is showing: stretching (false) or plyometrics (true).
+  plyoMode: false,
 };
 
 function read() {
@@ -58,6 +60,7 @@ export function getState() {
       ...data,
       allRoutines: [...data.customRoutines.map(customToRoutine), ...builtInRoutines],
       stats: computeStats(data.sessions),
+      plyoWeek: plyoWeek(data.sessions),
     };
   }
   return cachedDerived;
@@ -216,9 +219,39 @@ export function computeStats(sessions, today = new Date()) {
   };
 }
 
+/**
+ * The current Monday-to-Sunday week of plyometric training, as StatsCalculator.plyoWeek.
+ * Sessions count when they were saved with `plyo: true`.
+ */
+export function plyoWeek(sessions, today = new Date()) {
+  const todayKey = dayKey(today);
+  const days = new Set(sessions.filter((s) => s.plyo).map((s) => dayKey(new Date(s.startedAt))).filter((k) => k <= todayKey));
+  const weekStart = addDays(today, -((today.getDay() + 6) % 7)); // Monday
+  const weekStartKey = dayKey(weekStart);
+  const lastKey = days.size ? [...days].sort().pop() : null;
+  const lastSession = lastKey ? keyToDate(lastKey) : null;
+  const startOfToday = keyToDate(todayKey);
+  const daysSinceLast = lastSession ? Math.round((startOfToday - lastSession) / 86_400_000) : null;
+  const isReady = daysSinceLast == null || daysSinceLast >= PLYO_RECOVERY_DAYS;
+  const readyDay = lastSession ? addDays(lastSession, PLYO_RECOVERY_DAYS) : null;
+  return {
+    weekStart,
+    /** Day keys this week with at least one plyometric session. */
+    daysDone: new Set([...days].filter((k) => k >= weekStartKey)),
+    sessionsThisWeek: [...days].filter((k) => k >= weekStartKey).length,
+    lastSession,
+    daysSinceLast,
+    isReady,
+    /** The first day a new session fits; today when ready. */
+    nextReadyDay: readyDay && readyDay > startOfToday ? readyDay : startOfToday,
+  };
+}
+
 /** Same ranking as BenditoViewModel.suggestedRoutines(). */
 export function suggestedRoutines(hour = new Date().getHours()) {
-  const { allRoutines: all, settings } = getState();
+  const { allRoutines, settings } = getState();
+  // The recommendation card belongs to the stretching side; plyo has its own weekly plan.
+  const all = allRoutines.filter((r) => !isPlyoRoutine(r));
   const focus = new Set(settings.focusAreas);
   const timeIds =
     hour < 11 ? ["wake_up", "posture_reset", "full_body"]
